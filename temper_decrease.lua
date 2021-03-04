@@ -13,6 +13,31 @@ function parsing_ip_field(raw_field_data)
     return Daikin_BOXIP,D3netIP,UID
 end
 
+function get_target_temper()
+    currentTmp = fibaro:get(fibaro:getSelfId(),"ui.lblsetpoint.value")
+    if not string.find(currentTmp,"℃") then
+        return 25
+    end
+    currentTmp = tonumber(string.sub(currentTmp,1,-4))
+    return currentTmp
+end
+
+function increased_temper(currentTmp) -- max 32
+    if currentTmp < 32 then
+        return currentTmp + 1
+    else
+        return currentTmp
+    end
+end
+
+function decreased_temper(currentTmp) -- min16 32
+    if currentTmp > 16 then
+        return currentTmp - 1
+    else
+        return currentTmp
+    end
+end
+
 function print_error_message_on_labels(mes)
     fibaro:debug(tostring(mes))
     fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblPower.value", tostring(mes))
@@ -40,63 +65,48 @@ function isSuccess(errCode)
     end
 end
 
-function isJson(input)
-    if pcall(function() return json.decode(input)end) then 
+function is_read_response_ok(connection)
+    rdata, errCode = connection:read()
+    if not isSuccess(errCode) then
+        print_error_message_on_labels("Daikinbox does not response")
+        return false
+    end
+
+    if rdata == "{'response': 'OK'}"..string.char(0x0d)..string.char(0x0a) then 
         return true
     else
+        print_error_message_on_labels("Daikinbox does not response ok")
+        fibaro:debug("rdata = "..rdata)
         return false
     end
 end
 
-function isStatusFormat(input)
-    if isJson(input) and json.decode(input)['power'] then
-        return true
-    else 
-        return false
-    end
+function update_label()
+    fibaro:call(fibaro:getSelfId(), "setProperty", cmd_label, cmd_label_message)
 end
 
-function parsing_response(response)
-    return json.decode(response)
-end
-
-function update_labels(status)
-    fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblPower.value", status['power'])
-    fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblroomtmp.value", status['roomtmp']..'℃')
-    fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblsetpoint.value", status['setpoint']..'℃')
-    fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblopstatus.value", status['opstatus'])
-    fibaro:call(fibaro:getSelfId(), "setProperty", "ui.lblfandir.value", status['fandir'])   
-end
-
-function query_status_update(connection,D3netIP,UID)
-    local qurey_cmd = "unitstat,"..D3netIP..","..UID
-    bytes, errCode = connection:write(qurey_cmd)
+function sent_cmd_message(connection,Daikin_message)
+    bytes, errCode = connection:write(Daikin_message)
     if not isSuccess(errCode) then
         print_error_message_on_labels("write cmd fail")
-        fibaro:debug("write mes = "..qurey_cmd)
         fibaro:debug('write errCode = '..errCode)
     end
 
-    rdata, errCode = connection:read()
-    if not isSuccess(errCode) then
-        print_error_message_on_labels("read cmd fail")
-        fibaro:debug('read errCode = '..errCode)
-        fibaro:debug('read rdata = '..rdata)
-    end
-
-    if isStatusFormat(rdata) then
-        fibaro:debug(rdata)
-        update_labels(parsing_response(rdata))
-    else
-        fibaro:debug("response data error")
-        fibaro:debug("response data = "..rdata)
+    if is_read_response_ok(connection) then
+        update_label()
     end
 end
 
 fibaro:debug("button pressed")
 
+now_target = get_target_temper()
+targetTmp = decreased_temper(now_target)
+cmd = "setpoint,"..targetTmp
+cmd_label_message = targetTmp .."℃"
+
 Daikin_BOXIP,D3netIP,UID = parsing_ip_field(ip_field)
+Daikin_message = "unitctrl,"..D3netIP..","..UID..","..cmd
 
 connection = build_connection(Daikin_BOXIP, tonumber(Daikin_BOXPORT))
-query_status_update(connection,D3netIP,UID)
+sent_cmd_message(connection,Daikin_message)
 close_connection(connection)
